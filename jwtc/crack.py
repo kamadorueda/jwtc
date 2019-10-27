@@ -11,31 +11,29 @@ import jose.utils
 import jose.exceptions
 
 
-def gen_random_plain_key(key_bytes: int) -> bytes:
+def gen_random_plain_key(crypto_key_bytes: int) -> bytes:
     """Return a suitable key for HS* signing."""
-    return os.urandom(key_bytes)
+    return os.urandom(crypto_key_bytes)
 
 
 def crack_with_random_key(args):
     """Generate a random key and use it to verify the JWT."""
-    jwt, key_bytes, key_gen_func = args
-    tried_key: bytes = key_gen_func(key_bytes)
+    data_signed = args['data_signed']
+    data_signature = args['data_signature']
+    data_algorithm = args['data_algorithm']
 
-    signing_input, crypto_segment = jwt.rsplit(b'.', 1)
-    header_segment, _ = signing_input.split(b'.', 1)
+    crypto_key_bytes = args['crypto_key_bytes']
+    crypto_key_generator = args['crypto_key_generator']
+    crypto_engine_class = args['crypto_engine_class']
 
-    header = json.loads(
-        jose.utils.base64url_decode(header_segment).decode('utf-8'))
-    signature = jose.utils.base64url_decode(crypto_segment)
-
-    crypto = jose.jwk.get_key(header['alg'])(tried_key, header['alg'])
-
-    return crypto.verify(signing_input, signature), tried_key
+    tried_key: bytes = crypto_key_generator(crypto_key_bytes)
+    crypto_engine = crypto_engine_class(tried_key, data_algorithm)
+    return crypto_engine.verify(data_signed, data_signature), tried_key
 
 
-def solve(jwt: str, key_bytes: int):
+def solve(jwt: str, crypto_key_bytes: int):
     attempts: int = 0
-    search_space: int = 2 ** (8 * key_bytes)
+    search_space: int = 2 ** (8 * crypto_key_bytes)
     available_cpus: int = multiprocessing.cpu_count()
     results_per_round: int = 2 ** 15
 
@@ -44,6 +42,15 @@ def solve(jwt: str, key_bytes: int):
 
     print(f'Search space: {search_space}')
 
+    data_signed, crypto_segment = jwt.rsplit(b'.', 1)
+    header_segment, _ = data_signed.split(b'.', 1)
+
+    header = json.loads(
+        jose.utils.base64url_decode(header_segment).decode('utf-8'))
+    data_signature = jose.utils.base64url_decode(crypto_segment)
+    data_algorithm = header['alg']
+    crypto_engine_class = jose.jwk.get_key(data_algorithm)
+
     with multiprocessing.Pool(processes=available_cpus) as workers:
         while True:
             start_time: float = time.time()
@@ -51,7 +58,14 @@ def solve(jwt: str, key_bytes: int):
             results = workers.imap_unordered(
                 func=crack_with_random_key,
                 iterable=tuple(
-                    (jwt, key_bytes, gen_random_plain_key)
+                    {
+                        'data_signed': data_signed,
+                        'data_signature': data_signature,
+                        'data_algorithm': data_algorithm,
+                        'crypto_key_bytes': crypto_key_bytes,
+                        'crypto_key_generator': gen_random_plain_key,
+                        'crypto_engine_class': crypto_engine_class,
+                    }
                     for _ in range(available_cpus * results_per_round)),
                 chunksize=results_per_round)
             progress = 1 - attempt_failure_probability ** attempts
