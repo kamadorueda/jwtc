@@ -8,7 +8,7 @@ distutils.core.setup(
         'jwtc',
     ],
     install_requires=[
-        'authlib==0.12.1',
+        'python-jose==3.0.1',
     ],
     entry_points={
         'console_scripts': [

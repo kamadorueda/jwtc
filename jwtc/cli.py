@@ -24,7 +24,7 @@ def cli():
     notify_parameters(args)
 
     crack.solve(
-        jwt=args.jwt,
+        jwt=args.jwt.encode(),
         key_bytes=args.key_bytes)
 
     sys.exit(0)

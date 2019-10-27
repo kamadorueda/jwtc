@@ -1,21 +1,36 @@
 # Standard imports
 import os
+import json
 import time
 import contextlib
 import multiprocessing
 
 # Third parties imports
-import authlib.jose
+import jose.jws
+import jose.utils
+import jose.exceptions
+
+
+def gen_random_plain_key(key_bytes: int) -> bytes:
+    """Return a suitable key for HS* signing."""
+    return os.urandom(key_bytes)
 
 
 def crack_with_random_key(args):
     """Generate a random key and use it to verify the JWT."""
-    jwt, key_bytes = args
-    success, tried_key = False, os.urandom(key_bytes)
-    with contextlib.suppress(authlib.jose.errors.BadSignatureError):
-        authlib.jose.jwt.decode(jwt, tried_key)
-        success = True
-    return success, tried_key
+    jwt, key_bytes, key_gen_func = args
+    tried_key: bytes = key_gen_func(key_bytes)
+
+    signing_input, crypto_segment = jwt.rsplit(b'.', 1)
+    header_segment, _ = signing_input.split(b'.', 1)
+
+    header = json.loads(
+        jose.utils.base64url_decode(header_segment).decode('utf-8'))
+    signature = jose.utils.base64url_decode(crypto_segment)
+
+    crypto = jose.jwk.get_key(header['alg'])(tried_key, header['alg'])
+
+    return crypto.verify(signing_input, signature), tried_key
 
 
 def solve(jwt: str, key_bytes: int):
@@ -36,7 +51,7 @@ def solve(jwt: str, key_bytes: int):
             results = workers.imap_unordered(
                 func=crack_with_random_key,
                 iterable=tuple(
-                    (jwt, key_bytes)
+                    (jwt, key_bytes, gen_random_plain_key)
                     for _ in range(available_cpus * results_per_round)),
                 chunksize=results_per_round)
             progress = 1 - attempt_failure_probability ** attempts
