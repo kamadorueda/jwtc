@@ -47,30 +47,27 @@ def solve(jwt: str, crypto_key_bytes: int):
 
     header = json.loads(
         jose.utils.base64url_decode(header_segment).decode('utf-8'))
-    data_signature = jose.utils.base64url_decode(crypto_segment)
     data_algorithm = header['alg']
-    crypto_engine_class = jose.jwk.get_key(data_algorithm)
+
+    params = {
+        'data_signed': data_signed,
+        'data_signature': jose.utils.base64url_decode(crypto_segment),
+        'data_algorithm': data_algorithm,
+        'crypto_key_bytes': crypto_key_bytes,
+        'crypto_key_generator': gen_random_plain_key,
+        'crypto_engine_class': jose.jwk.get_key(data_algorithm),
+    }
+    work_per_round: tuple = tuple(
+        params for _ in range(available_cpus * results_per_round))
 
     with multiprocessing.Pool(processes=available_cpus) as workers:
+        start_time: float = time.time()
         while True:
-            start_time: float = time.time()
-            attempts += available_cpus * results_per_round
-            results = workers.imap_unordered(
-                func=crack_with_random_key,
-                iterable=tuple(
-                    {
-                        'data_signed': data_signed,
-                        'data_signature': data_signature,
-                        'data_algorithm': data_algorithm,
-                        'crypto_key_bytes': crypto_key_bytes,
-                        'crypto_key_generator': gen_random_plain_key,
-                        'crypto_engine_class': crypto_engine_class,
-                    }
-                    for _ in range(available_cpus * results_per_round)),
-                chunksize=results_per_round)
-            progress = 1 - attempt_failure_probability ** attempts
-
-            success_results = tuple(filter(lambda r: r[0], results))
+            success_results = tuple(filter(
+                lambda r: r[0], workers.imap_unordered(
+                    func=crack_with_random_key,
+                    iterable=work_per_round,
+                    chunksize=results_per_round)))
 
             if success_results:
                 print('\r', end='')
@@ -78,12 +75,15 @@ def solve(jwt: str, crypto_key_bytes: int):
                 print('  hex:', success_results[0][1].hex())
                 break
 
+            attempts += available_cpus * results_per_round
+            progress = 1 - attempt_failure_probability ** attempts
+
             elapsed: float = time.time() - start_time
-            speed: int = int(available_cpus * results_per_round / elapsed)
+            speed: int = int(attempts / elapsed)
             remaining: int = int(search_space * (1 - progress) / speed)
             print(f'\r  '
-                  f'attempts: {attempts}, '
-                  f'{progress:.8f}%, '
-                  f'{speed}/s, '
-                  f'{remaining} remaining seconds',
+                  f'{attempts} attempts ({speed}/s), '
+                  f'{progress:.4f}%, '
+                  f'{elapsed / 3600.0:.1f}h elapsed, '
+                  f'{remaining / 3600.0:.1f}h remaining',
                   end='')
